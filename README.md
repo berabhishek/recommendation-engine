@@ -34,3 +34,9 @@ docker compose up --build
 ```
 
 On the first container start, the image seeds a blank SQLite database schema, downloads the IMDb gzip files from `datasets.imdbws.com`, imports them, and writes the database into the named volume mounted at `/data`. Later container restarts reuse the same volume and skip the download/import step.
+
+Practical rule:
+
+- First time: `docker compose up --build`
+- Later runs: `docker compose up`
+- If already created and stopped: `docker compose start`

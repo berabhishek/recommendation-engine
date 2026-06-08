@@ -21,5 +21,5 @@ RUN python scripts/create_db_template.py
 
 EXPOSE 3000
 
-ENTRYPOINT ["python", "scripts/docker_entrypoint.py"]
+ENTRYPOINT ["python", "-m", "scripts.docker_entrypoint"]
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
