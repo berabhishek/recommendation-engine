@@ -146,6 +146,13 @@ class MovieEpisode(Base):
     movie = relationship("Movie", foreign_keys=[movie_id], back_populates="episodes")
 
 
+class AppState(Base):
+    __tablename__ = "app_state"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 Index("idx_movies_type_year", Movie.title_type, Movie.start_year)
 Index("idx_movies_title_year", Movie.primary_title, Movie.start_year)
 Index("idx_movie_genres_genre_movie", MovieGenre.genre, MovieGenre.movie_id)

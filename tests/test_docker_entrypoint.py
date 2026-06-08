@@ -39,8 +39,6 @@ def test_bootstrap_runs_download_then_import_and_writes_marker(tmp_path, monkeyp
         assert kwargs["reset"] is False
         assert kwargs["prepare_schema"] is False
         assert kwargs["rebuild_indexes"] is True
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        db_path.write_bytes(b"imported")
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("DATA_DIR", str(data_dir))
@@ -53,7 +51,8 @@ def test_bootstrap_runs_download_then_import_and_writes_marker(tmp_path, monkeyp
 
     assert calls == ["download", "import"]
     assert marker_path.read_text(encoding="utf-8") == "initialized\n"
-    assert db_path.read_bytes() == b"imported"
+    with create_engine(f"sqlite:///{db_path}").connect() as conn:
+        assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
 
     docker_entrypoint.bootstrap_database()
     assert calls == ["download", "import"]
@@ -148,6 +147,7 @@ def test_bootstrap_with_local_file_urls_populates_database_without_docker(tmp_pa
         assert conn.execute(text("SELECT COUNT(*) FROM people")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM movie_ratings")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM movie_principals")).scalar_one() == 1
+        assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
         index_names = {
             row[0]
             for row in conn.execute(

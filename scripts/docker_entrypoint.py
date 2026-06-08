@@ -4,7 +4,9 @@ import os
 import sys
 from pathlib import Path
 
-from app.database import ensure_parent_dir
+from sqlalchemy import text
+
+from app.database import ensure_parent_dir, get_engine
 from app.importer import import_imdb_data
 from scripts.download_imdb_data import download_imdb_data
 
@@ -13,6 +15,7 @@ DEFAULT_DATABASE_URL = "sqlite:////data/recommendation.db"
 DEFAULT_DATA_DIR = "/data/imdb-data"
 DEFAULT_TEMPLATE_PATH = "/opt/db-template/recommendation.db"
 DEFAULT_MARKER_PATH = "/data/.initialized"
+BOOTSTRAP_COMPLETE_KEY = "bootstrap_complete"
 
 
 def sqlite_path_from_url(database_url: str) -> Path:
@@ -29,9 +32,6 @@ def bootstrap_database() -> None:
     marker_path = Path(os.getenv("DB_INIT_MARKER", DEFAULT_MARKER_PATH))
     db_path = sqlite_path_from_url(database_url)
 
-    if marker_path.exists() and db_path.exists():
-        return
-
     ensure_parent_dir(database_url)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -39,6 +39,18 @@ def bootstrap_database() -> None:
         import shutil
 
         shutil.copy2(template_path, db_path)
+
+    engine = get_engine(database_url)
+    with engine.connect() as conn:
+        initialized = conn.execute(
+            text("SELECT 1 FROM app_state WHERE key = :key"),
+            {"key": BOOTSTRAP_COMPLETE_KEY},
+        ).scalar_one_or_none()
+        if initialized is not None:
+            if not marker_path.exists():
+                marker_path.parent.mkdir(parents=True, exist_ok=True)
+                marker_path.write_text("initialized\n", encoding="utf-8")
+            return
 
     download_imdb_data(data_dir)
 
@@ -49,6 +61,11 @@ def bootstrap_database() -> None:
         prepare_schema=False,
         rebuild_indexes=True,
     )
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT OR REPLACE INTO app_state (key, value) VALUES (:key, :value)"),
+            {"key": BOOTSTRAP_COMPLETE_KEY, "value": "true"},
+        )
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     marker_path.write_text("initialized\n", encoding="utf-8")
 
