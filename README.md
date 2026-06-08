@@ -26,3 +26,11 @@ python3 -m venv .venv
 ```
 
 The importer reads files from `raw data/` and rebuilds `data/recommendation.db`.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+On the first container start, the image seeds a blank SQLite database schema, downloads the IMDb gzip files from `datasets.imdbws.com`, imports them, and writes the database into the named volume mounted at `/data`. Later container restarts reuse the same volume and skip the download/import step.

@@ -4,7 +4,7 @@ import gzip
 from collections.abc import Iterator
 from pathlib import Path
 
-from sqlalchemy import Engine, insert, text
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 from app.database import create_indexes, drop_indexes, get_engine, get_session_factory, recreate_schema
@@ -20,6 +20,8 @@ from app.models import (
     PersonKnownForTitle,
     PersonProfession,
 )
+
+BATCH_SIZE = 100_000
 
 
 def is_null(value: str | None) -> bool:
@@ -74,7 +76,17 @@ def iter_tsv_gz(path: Path) -> Iterator[list[str]]:
 
 def flush_insert(session: Session, model, batch: list[dict[str, object]]) -> None:  # type: ignore[no-untyped-def]
     if batch:
-        session.execute(insert(model), batch)
+        columns = list(batch[0].keys())
+        placeholders = ", ".join(["?"] * len(columns))
+        column_sql = ", ".join(columns)
+        sql = f"INSERT INTO {model.__tablename__} ({column_sql}) VALUES ({placeholders})"
+        rows = [tuple(row[column] for column in columns) for row in batch]
+        raw_connection = session.connection().connection
+        cursor = raw_connection.cursor()
+        try:
+            cursor.executemany(sql, rows)
+        finally:
+            cursor.close()
 
 
 def drop_database_file(engine: Engine) -> None:
@@ -105,7 +117,7 @@ def import_movies(session: Session, path: Path) -> None:
                 "runtime_minutes": parse_int(parts[7]),
             }
         )
-        if len(movie_rows) >= 5000:
+        if len(movie_rows) >= BATCH_SIZE:
             flush_insert(session, Movie, movie_rows)
             movie_rows = []
         log_progress(path.name, count)
@@ -120,7 +132,7 @@ def import_movie_genres(session: Session, path: Path) -> None:
         count += 1
         for genre in split_list(parts[8]):
             genre_rows.append({"movie_id": parts[0], "genre": genre})
-        if len(genre_rows) >= 5000:
+        if len(genre_rows) >= BATCH_SIZE:
             flush_insert(session, MovieGenre, genre_rows)
             genre_rows = []
         log_progress(f"{path.name} genres", count)
@@ -143,7 +155,7 @@ def import_people(session: Session, path: Path) -> None:
                 "death_year": parse_int(parts[3]),
             }
         )
-        if len(people_rows) >= 5000:
+        if len(people_rows) >= BATCH_SIZE:
             flush_insert(session, Person, people_rows)
             people_rows = []
         log_progress(path.name, count)
@@ -163,10 +175,10 @@ def import_people_metadata(session: Session, path: Path) -> None:
             profession_rows.append({"person_id": person_id, "profession": profession})
         for position, movie_id in enumerate(split_list(parts[5])):
             known_for_rows.append({"person_id": person_id, "movie_id": movie_id, "position": position})
-        if len(profession_rows) >= 5000:
+        if len(profession_rows) >= BATCH_SIZE:
             flush_insert(session, PersonProfession, profession_rows)
             profession_rows = []
-        if len(known_for_rows) >= 5000:
+        if len(known_for_rows) >= BATCH_SIZE:
             flush_insert(session, PersonKnownForTitle, known_for_rows)
             known_for_rows = []
         log_progress(f"{path.name} metadata", count)
@@ -181,7 +193,7 @@ def import_ratings(session: Session, path: Path) -> None:
     for parts in iter_tsv_gz(path):
         count += 1
         rows.append({"movie_id": parts[0], "average_rating": parse_float(parts[1]) or 0.0, "num_votes": parse_int(parts[2]) or 0})
-        if len(rows) >= 5000:
+        if len(rows) >= BATCH_SIZE:
             flush_insert(session, MovieRating, rows)
             rows = []
         log_progress(path.name, count)
@@ -203,7 +215,7 @@ def import_principals(session: Session, path: Path) -> None:
                 "characters": None if is_null(parts[5]) else parts[5],
             }
         )
-        if len(rows) >= 5000:
+        if len(rows) >= BATCH_SIZE:
             flush_insert(session, MoviePrincipal, rows)
             rows = []
         log_progress(path.name, count)
@@ -227,7 +239,7 @@ def import_akas(session: Session, path: Path) -> None:
                 "is_original_title": parse_bool(parts[7]),
             }
         )
-        if len(rows) >= 5000:
+        if len(rows) >= BATCH_SIZE:
             flush_insert(session, MovieAka, rows)
             rows = []
         log_progress(path.name, count)
@@ -243,7 +255,7 @@ def import_crew(session: Session, path: Path) -> None:
         for role, members in (("director", parts[1]), ("writer", parts[2])):
             for person_id in split_list(members):
                 rows.append({"movie_id": movie_id, "person_id": person_id, "role": role})
-                if len(rows) >= 5000:
+                if len(rows) >= BATCH_SIZE:
                     flush_insert(session, MovieCrewLink, rows)
                     rows = []
         log_progress(path.name, count)
@@ -263,7 +275,7 @@ def import_episodes(session: Session, path: Path) -> None:
                 "episode_number": parse_int(parts[3]),
             }
         )
-        if len(rows) >= 5000:
+        if len(rows) >= BATCH_SIZE:
             flush_insert(session, MovieEpisode, rows)
             rows = []
         log_progress(path.name, count)
@@ -274,12 +286,15 @@ def import_imdb_data(
     database_url: str,
     data_dir: Path,
     reset: bool = True,
+    prepare_schema: bool = True,
+    rebuild_indexes: bool = True,
 ) -> None:
     engine = get_engine(database_url)
-    if reset:
-        drop_database_file(engine)
-    recreate_schema(engine, drop_existing=True)
-    drop_indexes(engine)
+    if prepare_schema:
+        if reset:
+            drop_database_file(engine)
+        recreate_schema(engine, drop_existing=True)
+        drop_indexes(engine)
     session_factory = get_session_factory(engine)
 
     with session_factory() as session:
@@ -298,4 +313,5 @@ def import_imdb_data(
         import_episodes(session, data_dir / "title.episode.tsv.gz")
         session.commit()
 
-    create_indexes(engine)
+    if rebuild_indexes:
+        create_indexes(engine)
