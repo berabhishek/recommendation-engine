@@ -2,15 +2,33 @@
 
 FastAPI + SQLAlchemy movie recommendation service built from IMDb gzip exports.
 
-## What this PR delivers
+## Features
 
 - Python rewrite of the app and importer
 - Normalized relational schema for movies, people, ratings, genres, principals, crew, aka titles, and episodes
 - Full gzip import into a fresh database
-- `GET /health`
-- `GET /movies` with filtering, sorting, and pagination
-- `GET /movies/{movie_id}`
-- `POST /recommendations`
+
+### API Endpoints
+
+- `GET /health` - Health check endpoint.
+- `GET /movies` - List movies with support for filtering, sorting, and pagination.
+  - Query parameters:
+    - `page` (default 1) - Page number.
+    - `pageSize` (default 25) - Items per page.
+    - `sortBy` (default `rating`) - Sort results (`title`, `year`, `rating`, `votes`, `runtime`).
+    - `sortDir` (default `desc`) - Sort direction (`asc`, `desc`).
+    - `q` - Text search on primary and original title.
+    - `titleType` - Filter by title type.
+    - `genres` - Comma-separated list of genres.
+    - `yearMin`, `yearMax` - Filter by start year range.
+    - `minRating`, `minVotes` - Filter by rating/votes.
+- `GET /movies/{movie_id}` - Get detailed information about a specific movie.
+- `POST /recommendations` - Get recommendations based on selected movies.
+  - Body parameters:
+    - `selectedMovieIds` - List of movie IDs (required).
+    - `limit` - Limit of recommendations to return (default 20).
+    - `page` - Page number.
+    - `pageSize` - Items per page.
 
 ## Database choice
 
@@ -26,3 +44,8 @@ python3 -m venv .venv
 ```
 
 The importer reads files from `raw data/` and rebuilds `data/recommendation.db`.
+
+You can also pass additional arguments to the importer script:
+- `--database-url`: The database URL (defaults to `sqlite:///data/recommendation.db`).
+- `--data-dir`: The directory containing raw IMDb gzip files.
+- `--no-reset`: Keep the existing database schema and data (skips dropping and recreating tables).
