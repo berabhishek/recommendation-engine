@@ -16,11 +16,10 @@ def write_gz(path: Path, lines: list[str]) -> Path:
     return path
 
 
-def test_bootstrap_runs_download_then_import_and_writes_marker(tmp_path, monkeypatch):
+def test_bootstrap_runs_download_then_import_and_records_state(tmp_path, monkeypatch):
     db_path = tmp_path / "data" / "recommendation.db"
     template_path = tmp_path / "template" / "recommendation.db"
     data_dir = tmp_path / "imdb"
-    marker_path = tmp_path / "data" / ".initialized"
     template_path.parent.mkdir(parents=True, exist_ok=True)
     recreate_schema(create_engine(f"sqlite:///{template_path}"), drop_existing=False)
 
@@ -43,14 +42,12 @@ def test_bootstrap_runs_download_then_import_and_writes_marker(tmp_path, monkeyp
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     monkeypatch.setenv("DB_TEMPLATE_PATH", str(template_path))
-    monkeypatch.setenv("DB_INIT_MARKER", str(marker_path))
     monkeypatch.setattr(docker_entrypoint, "download_imdb_data", fake_download)
     monkeypatch.setattr(docker_entrypoint, "import_imdb_data", fake_import)
 
     docker_entrypoint.bootstrap_database()
 
     assert calls == ["download", "import"]
-    assert marker_path.read_text(encoding="utf-8") == "initialized\n"
     with create_engine(f"sqlite:///{db_path}").connect() as conn:
         assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
 
@@ -58,13 +55,23 @@ def test_bootstrap_runs_download_then_import_and_writes_marker(tmp_path, monkeyp
     assert calls == ["download", "import"]
 
 
-def test_bootstrap_with_local_file_urls_populates_database_without_docker(tmp_path, monkeypatch):
+def test_bootstrap_rebuilds_dirty_database_before_importing(tmp_path, monkeypatch):
     data_dir = tmp_path / "imdb"
     db_path = tmp_path / "data" / "recommendation.db"
     template_path = tmp_path / "template" / "recommendation.db"
-    marker_path = tmp_path / "data" / ".initialized"
     template_path.parent.mkdir(parents=True, exist_ok=True)
     recreate_schema(create_engine(f"sqlite:///{template_path}"), drop_existing=False)
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    dirty_engine = create_engine(f"sqlite:///{db_path}")
+    recreate_schema(dirty_engine, drop_existing=False)
+    with dirty_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO movies (id, title_type, primary_title, original_title, is_adult) "
+                "VALUES ('ttdirty0001', 'movie', 'Dirty Movie', 'Dirty Movie', 0)"
+            )
+        )
 
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
@@ -133,12 +140,10 @@ def test_bootstrap_with_local_file_urls_populates_database_without_docker(tmp_pa
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     monkeypatch.setenv("DB_TEMPLATE_PATH", str(template_path))
-    monkeypatch.setenv("DB_INIT_MARKER", str(marker_path))
     monkeypatch.setattr(docker_entrypoint, "download_imdb_data", local_download)
 
     docker_entrypoint.bootstrap_database()
 
-    assert marker_path.exists()
     assert db_path.exists()
 
     engine = create_engine(f"sqlite:///{db_path}")
@@ -148,6 +153,7 @@ def test_bootstrap_with_local_file_urls_populates_database_without_docker(tmp_pa
         assert conn.execute(text("SELECT COUNT(*) FROM movie_ratings")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM movie_principals")).scalar_one() == 1
         assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
+        assert conn.execute(text("SELECT COUNT(*) FROM movies WHERE id = 'ttdirty0001'")).scalar_one() == 0
         index_names = {
             row[0]
             for row in conn.execute(
@@ -157,9 +163,7 @@ def test_bootstrap_with_local_file_urls_populates_database_without_docker(tmp_pa
         assert "idx_movies_type_year" in index_names
         assert "idx_ratings_votes_rating" in index_names
 
-    marker_mtime = marker_path.stat().st_mtime
     docker_entrypoint.bootstrap_database()
-    assert marker_path.stat().st_mtime == marker_mtime
 
 
 def test_download_file_urls_are_configured():

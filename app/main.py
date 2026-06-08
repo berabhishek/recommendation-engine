@@ -6,7 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import Select, and_, exists, func, literal, or_, select
 from sqlalchemy.orm import Session
 
-from app.database import get_engine, get_session_factory, recreate_schema
+from app.database import get_engine, get_session_factory
 from app.models import Movie, MovieAka, MovieCrewLink, MovieEpisode, MovieGenre, MoviePrincipal, MovieRating
 from app.schemas import (
     MovieDetail,
@@ -28,11 +28,6 @@ app = FastAPI(
 
 engine = get_engine()
 session_factory = get_session_factory(engine)
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    recreate_schema(engine, drop_existing=False)
 
 
 def db_session() -> Generator[Session, None, None]:
