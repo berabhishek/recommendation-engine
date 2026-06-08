@@ -9,3 +9,5 @@ data/*.db
 .venv/
 __pycache__/
 *.pyc
+recommendation_engine.egg-info/
+*.egg-info/
