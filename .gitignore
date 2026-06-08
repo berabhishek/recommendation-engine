@@ -5,3 +5,7 @@ server.log
 .DS_Store
 raw data/
 data/
+data/*.db
+.venv/
+__pycache__/
+*.pyc
