@@ -7,7 +7,7 @@ name = "recommendation-engine"
 version = "0.1.0"
 description = "FastAPI movie recommendation engine backed by SQLAlchemy"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115",
   "sqlalchemy>=2.0",
