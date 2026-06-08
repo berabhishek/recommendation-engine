@@ -1,3 +1,7 @@
 cookies.txt
 database.sqlite
+database.sqlite-journal
 server.log
+.DS_Store
+raw data/
+data/
