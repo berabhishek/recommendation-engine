@@ -50,6 +50,7 @@ def test_bootstrap_runs_download_then_import_and_records_state(tmp_path, monkeyp
     assert calls == ["download", "import"]
     with create_engine(f"sqlite:///{db_path}").connect() as conn:
         assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
+    assert list(data_dir.glob("*.tsv.gz")) == []
 
     docker_entrypoint.bootstrap_database()
     assert calls == ["download", "import"]
@@ -145,6 +146,7 @@ def test_bootstrap_rebuilds_dirty_database_before_importing(tmp_path, monkeypatc
     docker_entrypoint.bootstrap_database()
 
     assert db_path.exists()
+    assert list(data_dir.glob("*.tsv.gz")) == []
 
     engine = create_engine(f"sqlite:///{db_path}")
     with engine.connect() as conn:
@@ -164,6 +166,37 @@ def test_bootstrap_rebuilds_dirty_database_before_importing(tmp_path, monkeypatc
         assert "idx_ratings_votes_rating" in index_names
 
     docker_entrypoint.bootstrap_database()
+
+
+def test_bootstrap_recovers_when_app_state_table_is_missing(tmp_path, monkeypatch):
+    db_path = tmp_path / "data" / "recommendation.db"
+    data_dir = tmp_path / "imdb"
+
+    calls: list[str] = []
+
+    def fake_download(target_dir: Path, overwrite: bool = False) -> None:
+        calls.append("download")
+        assert target_dir == data_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+    def fake_import(database_url: str, import_data_dir: Path, **kwargs) -> None:
+        calls.append("import")
+        assert database_url == f"sqlite:///{db_path}"
+        assert import_data_dir == data_dir
+        assert kwargs["reset"] is False
+        assert kwargs["prepare_schema"] is False
+        assert kwargs["rebuild_indexes"] is True
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setattr(docker_entrypoint, "download_imdb_data", fake_download)
+    monkeypatch.setattr(docker_entrypoint, "import_imdb_data", fake_import)
+
+    docker_entrypoint.bootstrap_database()
+
+    assert calls == ["download", "import"]
+    with create_engine(f"sqlite:///{db_path}").connect() as conn:
+        assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
 
 
 def test_download_file_urls_are_configured():

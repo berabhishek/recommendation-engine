@@ -6,8 +6,9 @@ import shutil
 from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
-from app.database import ensure_parent_dir, get_engine
+from app.database import ensure_parent_dir, get_engine, recreate_schema
 from app.importer import import_imdb_data
 from scripts.download_imdb_data import download_imdb_data
 
@@ -16,6 +17,7 @@ DEFAULT_DATABASE_URL = "sqlite:////data/recommendation.db"
 DEFAULT_DATA_DIR = "/data/imdb-data"
 DEFAULT_TEMPLATE_PATH = "/opt/db-template/recommendation.db"
 BOOTSTRAP_COMPLETE_KEY = "bootstrap_complete"
+IMDB_GZ_PATTERN = "*.tsv.gz"
 
 
 def sqlite_path_from_url(database_url: str) -> Path:
@@ -23,6 +25,12 @@ def sqlite_path_from_url(database_url: str) -> Path:
     if not database_url.startswith(prefix):
         raise ValueError(f"Unsupported database URL: {database_url}")
     return Path(database_url.removeprefix(prefix))
+
+
+def cleanup_downloaded_imdb_files(data_dir: Path) -> None:
+    for path in data_dir.glob(IMDB_GZ_PATTERN):
+        if path.is_file():
+            path.unlink()
 
 
 def bootstrap_database() -> None:
@@ -38,12 +46,16 @@ def bootstrap_database() -> None:
         shutil.copy2(template_path, db_path)
 
     check_engine = get_engine(database_url)
-    with check_engine.connect() as conn:
-        initialized = conn.execute(
-            text("SELECT 1 FROM app_state WHERE key = :key"),
-            {"key": BOOTSTRAP_COMPLETE_KEY},
-        ).scalar_one_or_none()
-    check_engine.dispose()
+    try:
+        with check_engine.connect() as conn:
+            initialized = conn.execute(
+                text("SELECT 1 FROM app_state WHERE key = :key"),
+                {"key": BOOTSTRAP_COMPLETE_KEY},
+            ).scalar_one_or_none()
+    except OperationalError:
+        initialized = None
+    finally:
+        check_engine.dispose()
     if initialized is not None:
         return
 
@@ -53,6 +65,7 @@ def bootstrap_database() -> None:
         shutil.copy2(template_path, db_path)
 
     runtime_engine = get_engine(database_url)
+    recreate_schema(runtime_engine, drop_existing=False)
 
     download_imdb_data(data_dir)
 
@@ -63,6 +76,7 @@ def bootstrap_database() -> None:
         prepare_schema=False,
         rebuild_indexes=True,
     )
+    cleanup_downloaded_imdb_files(data_dir)
     with runtime_engine.begin() as conn:
         conn.execute(
             text("INSERT OR REPLACE INTO app_state (key, value) VALUES (:key, :value)"),
