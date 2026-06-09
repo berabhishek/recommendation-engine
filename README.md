@@ -9,12 +9,33 @@ This repository has two main workflows:
 - Docker-first bootstrap for a self-contained first run
 - Local development with a virtual environment and the import scripts
 
-The app exposes:
+The app exposes the following REST API endpoints:
 
 - `GET /health`
+  - Returns `{"status": "ok"}`
 - `GET /movies`
+  - Returns a paginated list of movies.
+  - Query parameters:
+    - `page` (int, default: 1): The page number.
+    - `pageSize` (int, default: 25, max: 100): The number of movies per page.
+    - `sortBy` (str, default: "rating"): Sorting column ("title", "year", "rating", "votes", "runtime").
+    - `sortDir` (str, default: "desc"): Sort direction ("asc" or "desc").
+    - `q` (str, optional): Search term for primary or original titles.
+    - `titleType` (str, optional): Filter by title type.
+    - `genres` (str, optional): Comma-separated list of genres to filter by.
+    - `yearMin` (int, optional): Minimum start year.
+    - `yearMax` (int, optional): Maximum start year.
+    - `minRating` (float, optional): Minimum average rating.
+    - `minVotes` (int, optional): Minimum number of votes.
 - `GET /movies/{movie_id}`
+  - Returns detailed information about a specific movie, including its cast and crew.
 - `POST /recommendations`
+  - Returns a list of movie recommendations based on a selection of movies.
+  - Payload:
+    - `selectedMovieIds` (list[str]): Required. A list of one or more movie IDs.
+    - `limit` (int, default: 20): The number of top recommendations.
+    - `page` (int, default: 1): The page number.
+    - `pageSize` (int, default: 20): The number of items per page.
 
 ## Recommended Start
 
@@ -51,7 +72,7 @@ If you want to run the app without Docker:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -e ".[dev]"
 ```
 
 ### Import the IMDb data
@@ -64,6 +85,8 @@ The importer reads gzip files from `raw data/` by default and rebuilds `data/rec
 
 Optional flags:
 
+- `--database-url` (str): Override the target database URL (default from environment or `data/recommendation.db`).
+- `--data-dir` (str): Provide an alternate directory for input `.tsv.gz` files.
 - `--no-reset` keeps the existing database file and schema.
 - `--progress` forces the CLI progress bar.
 - `--no-progress` disables the progress bar.
@@ -82,6 +105,13 @@ If you want to fetch the IMDb exports yourself instead of relying on Docker boot
 .venv/bin/python scripts/download_imdb_data.py
 ```
 
+Optional flags:
+
+- `--data-dir` (str): Override the download directory (default `/data/imdb-data` if inside docker or configured by env).
+- `--overwrite`: Force re-download even if the target file already exists.
+- `--progress`: Force showing the download progress bar.
+- `--no-progress`: Disable the progress bar.
+
 By default this downloads into `/data/imdb-data` when run in the container, or into the directory you provide via `--data-dir`.
 
 ## Environment Variables
@@ -95,6 +125,16 @@ These are the main runtime settings:
 - `IMDB_DOWNLOAD_OVERWRITE`: Set to `1` to re-download existing IMDb files when using the download script.
 - `DEFAULT_PAGE_SIZE`: Default page size for list endpoints.
 - `MAX_PAGE_SIZE`: Maximum page size accepted by list endpoints.
+
+## Testing
+
+Test dependencies are managed in `pyproject.toml` using `[dev]` optional dependencies.
+
+To run tests and check code coverage:
+
+```bash
+PYTHONPATH=. .venv/bin/pytest --cov=app --cov=scripts --cov-report=term-missing
+```
 
 ## Repository Layout
 
