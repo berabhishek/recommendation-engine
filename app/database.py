@@ -17,7 +17,7 @@ def get_database_url(database_url: str | None = None) -> str:
     return database_url or DATABASE_URL
 
 
-def get_engine(database_url: str | None = None) -> Engine:
+def get_engine(database_url: str | None = None, apply_sqlite_pragmas: bool = True) -> Engine:
     url = get_database_url(database_url)
     connect_args: dict[str, object] = {}
     if url.startswith("sqlite"):
@@ -26,12 +26,17 @@ def get_engine(database_url: str | None = None) -> Engine:
 
     engine = create_engine(url, future=True, pool_pre_ping=True, connect_args=connect_args)
 
-    if url.startswith("sqlite"):
+    if url.startswith("sqlite") and apply_sqlite_pragmas:
 
         @event.listens_for(engine, "connect")
         def _set_sqlite_pragmas(dbapi_connection, _connection_record):  # type: ignore[no-untyped-def]
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys = ON")
+            cursor.execute("PRAGMA journal_mode = WAL")
+            cursor.execute("PRAGMA synchronous = NORMAL")
+            cursor.execute("PRAGMA temp_store = MEMORY")
+            cursor.execute("PRAGMA cache_size = -200000")
+            cursor.execute("PRAGMA mmap_size = 268435456")
             cursor.close()
 
     return engine

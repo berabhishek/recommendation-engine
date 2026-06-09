@@ -121,6 +121,7 @@ def import_movies(session: Session, path: Path, progress: ProgressBar | None = N
                 "title_type": parts[1],
                 "primary_title": parts[2],
                 "original_title": parts[3],
+                "genres_text": None if is_null(parts[8]) else parts[8],
                 "is_adult": parse_bool(parts[4]),
                 "start_year": parse_int(parts[5]),
                 "end_year": parse_int(parts[6]),
@@ -367,7 +368,7 @@ def import_imdb_data(
     rebuild_indexes: bool = True,
     progress: ProgressBar | None = None,
 ) -> None:
-    engine = get_engine(database_url)
+    engine = get_engine(database_url, apply_sqlite_pragmas=False)
     if prepare_schema:
         if reset:
             drop_database_file(engine)

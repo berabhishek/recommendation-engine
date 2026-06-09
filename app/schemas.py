@@ -6,8 +6,9 @@ from pydantic import BaseModel, Field
 class PaginationMeta(BaseModel):
     page: int
     page_size: int = Field(alias="pageSize")
-    total: int
-    total_pages: int = Field(alias="totalPages")
+    has_next: bool = Field(default=False, alias="hasNext")
+    total: int | None = None
+    total_pages: int | None = Field(default=None, alias="totalPages")
 
     model_config = {"populate_by_name": True}
 

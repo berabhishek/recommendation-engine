@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator, Sequence
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from sqlalchemy import Select, and_, exists, func, literal, or_, select
+from sqlalchemy import Select, and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_engine, get_session_factory
@@ -51,10 +51,16 @@ def split_csv(values: str | None) -> list[str]:
     return [item.strip() for item in values.split(",") if item.strip()]
 
 
-def movie_summary_row(row: dict[str, object]) -> MovieSummary:
-    genres = row.get("genres") or []
+def movie_genres_from_row(row: dict[str, object]) -> list[str]:
+    genres = row.get("genres")
+    if genres is None or genres == "":
+        genres = row.get("genres_text") or ""
     if isinstance(genres, str):
-        genres = split_csv(genres)
+        return split_csv(genres)
+    return list(genres)
+
+
+def movie_summary_row(row: dict[str, object]) -> MovieSummary:
     return MovieSummary(
         id=row["id"],
         titleType=row["title_type"],
@@ -64,14 +70,22 @@ def movie_summary_row(row: dict[str, object]) -> MovieSummary:
         startYear=row.get("start_year"),
         endYear=row.get("end_year"),
         runtimeMinutes=row.get("runtime_minutes"),
-        genres=list(genres),
+        genres=movie_genres_from_row(row),
         averageRating=row.get("average_rating"),
         numVotes=row.get("num_votes"),
     )
 
 
-def pagination_meta(page: int, page_size: int, total: int) -> PaginationMeta:
-    return PaginationMeta(page=page, page_size=page_size, total=total, total_pages=max(1, (total + page_size - 1) // page_size))
+def pagination_meta(page: int, page_size: int, has_next: bool, total: int | None = None) -> PaginationMeta:
+    payload: dict[str, object] = {
+        "page": page,
+        "page_size": page_size,
+        "has_next": has_next,
+    }
+    if total is not None:
+        payload["total"] = total
+        payload["total_pages"] = max(1, (total + page_size - 1) // page_size)
+    return PaginationMeta(**payload)
 
 
 def base_movie_query(
@@ -82,10 +96,11 @@ def base_movie_query(
     year_max: int | None = None,
     min_rating: float | None = None,
     min_votes: int | None = None,
+    join_rating: bool = False,
 ) -> Select[tuple[str]]:
-    stmt = select(Movie.id).distinct()
+    stmt = select(Movie.id)
 
-    if min_rating is not None or min_votes is not None:
+    if join_rating or min_rating is not None or min_votes is not None:
         stmt = stmt.join(MovieRating, MovieRating.movie_id == Movie.id)
 
     conditions = []
@@ -116,7 +131,34 @@ def base_movie_query(
     return stmt
 
 
-def list_movies_query(
+def movie_sort_order(sort_by: str, sort_dir: str) -> tuple[bool, list[object]]:
+    descending = sort_dir.lower() != "asc"
+    sort_by = sort_by.lower()
+
+    if sort_by == "title":
+        column = Movie.primary_title
+        return False, [column.desc().nullslast() if descending else column.asc().nullsfirst(), Movie.id.asc()]
+    if sort_by == "year":
+        column = Movie.start_year
+        return False, [column.desc().nullslast() if descending else column.asc().nullsfirst(), Movie.id.asc()]
+    if sort_by == "votes":
+        return True, [
+            MovieRating.num_votes.desc().nullslast() if descending else MovieRating.num_votes.asc().nullsfirst(),
+            MovieRating.average_rating.desc().nullslast() if descending else MovieRating.average_rating.asc().nullsfirst(),
+            Movie.id.asc(),
+        ]
+    if sort_by == "runtime":
+        column = Movie.runtime_minutes
+        return False, [column.desc().nullslast() if descending else column.asc().nullsfirst(), Movie.id.asc()]
+
+    return True, [
+        MovieRating.average_rating.desc().nullslast() if descending else MovieRating.average_rating.asc().nullsfirst(),
+        MovieRating.num_votes.desc().nullslast() if descending else MovieRating.num_votes.asc().nullsfirst(),
+        Movie.id.asc(),
+    ]
+
+
+def build_movie_page_ids_stmt(
     page: int,
     page_size: int,
     sort_by: str,
@@ -128,52 +170,25 @@ def list_movies_query(
     year_max: int | None,
     min_rating: float | None,
     min_votes: int | None,
-):
-    filtered_ids = base_movie_query(q, title_type, genres, year_min, year_max, min_rating, min_votes).cte("filtered_ids")
-    genre_agg = (
-        select(MovieGenre.movie_id.label("movie_id"), func.group_concat(MovieGenre.genre, ",").label("genres"))
-        .group_by(MovieGenre.movie_id)
-        .cte("genre_agg")
-    )
-    rating = MovieRating
-    stmt = (
-        select(
-            Movie.id.label("id"),
-            Movie.title_type.label("title_type"),
-            Movie.primary_title.label("primary_title"),
-            Movie.original_title.label("original_title"),
-            Movie.is_adult.label("is_adult"),
-            Movie.start_year.label("start_year"),
-            Movie.end_year.label("end_year"),
-            Movie.runtime_minutes.label("runtime_minutes"),
-            func.coalesce(genre_agg.c.genres, literal("")).label("genres"),
-            rating.average_rating.label("average_rating"),
-            rating.num_votes.label("num_votes"),
-        )
-        .select_from(Movie)
-        .join(filtered_ids, filtered_ids.c.id == Movie.id)
-        .outerjoin(genre_agg, genre_agg.c.movie_id == Movie.id)
-        .outerjoin(rating, rating.movie_id == Movie.id)
-    )
+) -> Select[tuple[str]]:
+    requires_rating_sort, sort_order = movie_sort_order(sort_by, sort_dir)
+    requires_rating_filter = min_rating is not None or min_votes is not None
+    filtered_ids = base_movie_query(
+        q,
+        title_type,
+        genres,
+        year_min,
+        year_max,
+        min_rating,
+        min_votes,
+        join_rating=requires_rating_filter,
+    ).cte("filtered_ids")
 
-    sort_direction = sort_dir.lower()
-    descending = sort_direction != "asc"
-    sort_map = {
-        "title": Movie.primary_title,
-        "year": Movie.start_year,
-        "rating": rating.average_rating,
-        "votes": rating.num_votes,
-        "runtime": Movie.runtime_minutes,
-    }
-    sort_column = sort_map.get(sort_by, rating.average_rating)
-    if descending:
-        stmt = stmt.order_by(sort_column.desc().nullslast(), Movie.primary_title.asc())
-    else:
-        stmt = stmt.order_by(sort_column.asc().nullsfirst(), Movie.primary_title.asc())
-
-    stmt = stmt.limit(page_size).offset((page - 1) * page_size)
-    count_stmt = select(func.count()).select_from(filtered_ids)
-    return stmt, count_stmt
+    stmt = select(Movie.id).select_from(Movie).join(filtered_ids, filtered_ids.c.id == Movie.id)
+    if requires_rating_sort:
+        stmt = stmt.join(MovieRating, MovieRating.movie_id == Movie.id)
+    stmt = stmt.order_by(*sort_order)
+    return stmt.limit(page_size + 1).offset((page - 1) * page_size)
 
 
 @app.get("/health")
@@ -181,52 +196,76 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/movies", response_model=MovieListResponse)
+@app.get("/movies", response_model=MovieListResponse, response_model_exclude_none=True)
 def list_movies(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE, alias="pageSize"),
     sort_by: str = Query(default="rating", alias="sortBy"),
     sort_dir: str = Query(default="desc", alias="sortDir"),
     q: str | None = None,
-    title_type: str | None = Query(default=None, alias="titleType"),
+    title_type: str | None = Query(default="movie", alias="titleType"),
     genres: str | None = None,
     year_min: int | None = Query(default=None, alias="yearMin"),
     year_max: int | None = Query(default=None, alias="yearMax"),
     min_rating: float | None = Query(default=None, alias="minRating"),
-    min_votes: int | None = Query(default=None, alias="minVotes"),
+    min_votes: int | None = Query(default=100, alias="minVotes"),
+    include_total: bool = Query(default=False, alias="includeTotal"),
     session: Session = Depends(db_session),
 ):
     genre_list = split_csv(genres)
-    stmt, count_stmt = list_movies_query(page, page_size, sort_by, sort_dir, q, title_type, genre_list, year_min, year_max, min_rating, min_votes)
-    rows = session.execute(stmt).mappings().all()
-    total = session.scalar(count_stmt) or 0
-    data = [movie_summary_row(row) for row in rows]
-    return MovieListResponse(data=data, meta=pagination_meta(page, page_size, total))
+    page_ids_stmt = build_movie_page_ids_stmt(page, page_size, sort_by, sort_dir, q, title_type, genre_list, year_min, year_max, min_rating, min_votes)
+    page_ids = session.execute(page_ids_stmt).scalars().all()
+    has_next = len(page_ids) > page_size
+    page_ids = page_ids[:page_size]
+
+    rows_by_id: dict[str, dict[str, object]] = {}
+    if page_ids:
+        rows = session.execute(
+            select(
+                Movie.id.label("id"),
+                Movie.title_type.label("title_type"),
+                Movie.primary_title.label("primary_title"),
+                Movie.original_title.label("original_title"),
+                Movie.genres_text.label("genres_text"),
+                Movie.is_adult.label("is_adult"),
+                Movie.start_year.label("start_year"),
+                Movie.end_year.label("end_year"),
+                Movie.runtime_minutes.label("runtime_minutes"),
+                MovieRating.average_rating.label("average_rating"),
+                MovieRating.num_votes.label("num_votes"),
+            )
+            .select_from(Movie)
+            .outerjoin(MovieRating, MovieRating.movie_id == Movie.id)
+            .where(Movie.id.in_(page_ids))
+        ).mappings().all()
+        rows_by_id = {row["id"]: dict(row) for row in rows}
+
+    data = [movie_summary_row(rows_by_id[movie_id]) for movie_id in page_ids if movie_id in rows_by_id]
+
+    total = None
+    if include_total:
+        total = session.scalar(select(func.count()).select_from(base_movie_query(q, title_type, genre_list, year_min, year_max, min_rating, min_votes).cte("filtered_movies"))) or 0
+
+    return MovieListResponse(data=data, meta=pagination_meta(page, page_size, has_next, total))
 
 
 @app.get("/movies/{movie_id}", response_model=MovieDetail)
 def get_movie(movie_id: str, session: Session = Depends(db_session)):
-    genre_agg = (
-        select(MovieGenre.movie_id.label("movie_id"), func.group_concat(MovieGenre.genre, ",").label("genres"))
-        .group_by(MovieGenre.movie_id)
-        .cte("genre_agg_detail")
-    )
     movie = session.execute(
         select(
             Movie.id.label("id"),
             Movie.title_type.label("title_type"),
             Movie.primary_title.label("primary_title"),
             Movie.original_title.label("original_title"),
+            Movie.genres_text.label("genres_text"),
             Movie.is_adult.label("is_adult"),
             Movie.start_year.label("start_year"),
             Movie.end_year.label("end_year"),
             Movie.runtime_minutes.label("runtime_minutes"),
-            func.coalesce(genre_agg.c.genres, literal("")).label("genres"),
             MovieRating.average_rating.label("average_rating"),
             MovieRating.num_votes.label("num_votes"),
         )
         .select_from(Movie)
-        .outerjoin(genre_agg, genre_agg.c.movie_id == Movie.id)
         .outerjoin(MovieRating, MovieRating.movie_id == Movie.id)
         .where(Movie.id == movie_id)
     ).mappings().first()
@@ -258,6 +297,8 @@ def get_movie(movie_id: str, session: Session = Depends(db_session)):
         crew_links=[dict(item) for item in crew_links],
         episode=dict(episode) if episode else None,
     )
+
+
 @app.post("/recommendations", response_model=RecommendationResponse)
 def recommend_movies(payload: RecommendationRequest, session: Session = Depends(db_session)):
     if not payload.selected_movie_ids:
@@ -287,11 +328,6 @@ def recommend_movies(payload: RecommendationRequest, session: Session = Depends(
     )
     selected_types = {row["title_type"] for row in selected_movies}
 
-    genre_agg = (
-        select(MovieGenre.movie_id.label("movie_id"), func.group_concat(MovieGenre.genre, ",").label("genres"))
-        .group_by(MovieGenre.movie_id)
-        .cte("candidate_genre_agg")
-    )
     candidate_filters = [Movie.id.notin_(selected_ids)]
     if selected_genres:
         candidate_filters.append(
@@ -310,19 +346,18 @@ def recommend_movies(payload: RecommendationRequest, session: Session = Depends(
             Movie.title_type.label("title_type"),
             Movie.primary_title.label("primary_title"),
             Movie.original_title.label("original_title"),
+            Movie.genres_text.label("genres_text"),
             Movie.is_adult.label("is_adult"),
             Movie.start_year.label("start_year"),
             Movie.end_year.label("end_year"),
             Movie.runtime_minutes.label("runtime_minutes"),
-            func.coalesce(genre_agg.c.genres, literal("")).label("genres"),
             MovieRating.average_rating.label("average_rating"),
             MovieRating.num_votes.label("num_votes"),
         )
         .select_from(Movie)
         .outerjoin(MovieRating, MovieRating.movie_id == Movie.id)
-        .outerjoin(genre_agg, genre_agg.c.movie_id == Movie.id)
         .where(and_(*candidate_filters))
-        .order_by(MovieRating.average_rating.desc().nullslast(), MovieRating.num_votes.desc().nullslast(), Movie.primary_title.asc())
+        .order_by(MovieRating.average_rating.desc().nullslast(), MovieRating.num_votes.desc().nullslast(), Movie.id.asc())
         .limit(2000)
     )
     candidate_rows = session.execute(candidate_stmt).mappings().all()
@@ -345,7 +380,7 @@ def recommend_movies(payload: RecommendationRequest, session: Session = Depends(
     scored: list[RecommendationItem] = []
     for row in candidate_rows:
         movie_id = row["id"]
-        genres = set(split_csv(row["genres"]))
+        genres = set(movie_genres_from_row(row))
         principal_set = principal_people.get(movie_id, set())
         crew_set = crew_people.get(movie_id, set())
         shared_genres = len(genres & selected_genres)
@@ -398,7 +433,7 @@ def recommend_movies(payload: RecommendationRequest, session: Session = Depends(
     end = start + page_size
     page_items = scored[start:end]
     total = len(scored)
-    return RecommendationResponse(data=page_items, meta=pagination_meta(page, page_size, total))
+    return RecommendationResponse(data=page_items, meta=pagination_meta(page, page_size, has_next=end < total, total=total))
 
 
 def main() -> None:

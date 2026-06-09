@@ -164,6 +164,7 @@ def test_bootstrap_rebuilds_dirty_database_before_importing(tmp_path, monkeypatc
         }
         assert "idx_movies_type_year" in index_names
         assert "idx_ratings_votes_rating" in index_names
+        assert "idx_ratings_rating_votes_movie" in index_names
 
     docker_entrypoint.bootstrap_database()
 
@@ -196,6 +197,62 @@ def test_bootstrap_recovers_when_app_state_table_is_missing(tmp_path, monkeypatc
 
     assert calls == ["download", "import"]
     with create_engine(f"sqlite:///{db_path}").connect() as conn:
+        assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
+
+
+def test_bootstrap_rebuilds_initialized_database_missing_required_schema(tmp_path, monkeypatch):
+    db_path = tmp_path / "data" / "recommendation.db"
+    data_dir = tmp_path / "imdb"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    old_engine = create_engine(f"sqlite:///{db_path}")
+    with old_engine.begin() as conn:
+        conn.execute(text("CREATE TABLE app_state (key VARCHAR(64) PRIMARY KEY, value TEXT NOT NULL)"))
+        conn.execute(text("INSERT INTO app_state (key, value) VALUES ('bootstrap_complete', 'true')"))
+        conn.execute(
+            text(
+                "CREATE TABLE movies ("
+                "id VARCHAR(20) PRIMARY KEY, "
+                "title_type VARCHAR(50) NOT NULL, "
+                "primary_title VARCHAR(512) NOT NULL, "
+                "original_title VARCHAR(512) NOT NULL, "
+                "is_adult BOOLEAN NOT NULL"
+                ")"
+            )
+        )
+
+    calls: list[str] = []
+
+    def fake_download(target_dir: Path, overwrite: bool = False) -> None:
+        calls.append("download")
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+    def fake_import(database_url: str, import_data_dir: Path, **kwargs) -> None:
+        calls.append("import")
+        assert database_url == f"sqlite:///{db_path}"
+        assert import_data_dir == data_dir
+        assert kwargs["reset"] is False
+        assert kwargs["prepare_schema"] is False
+        assert kwargs["rebuild_indexes"] is True
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setattr(docker_entrypoint, "download_imdb_data", fake_download)
+    monkeypatch.setattr(docker_entrypoint, "import_imdb_data", fake_import)
+
+    docker_entrypoint.bootstrap_database()
+
+    assert calls == ["download", "import"]
+    with create_engine(f"sqlite:///{db_path}").connect() as conn:
+        movie_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(movies)"))}
+        assert "genres_text" in movie_columns
+        index_names = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'")
+            )
+        }
+        assert "idx_ratings_rating_votes_movie" in index_names
         assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
 
 
