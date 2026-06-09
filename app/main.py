@@ -433,7 +433,7 @@ def recommend_movies(payload: RecommendationRequest, session: Session = Depends(
     end = start + page_size
     page_items = scored[start:end]
     total = len(scored)
-    return RecommendationResponse(data=page_items, meta=pagination_meta(page, page_size, total))
+    return RecommendationResponse(data=page_items, meta=pagination_meta(page, page_size, has_next=end < total, total=total))
 
 
 def main() -> None:

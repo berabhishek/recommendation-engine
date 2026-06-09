@@ -18,6 +18,8 @@ DEFAULT_DATA_DIR = "/data/imdb-data"
 DEFAULT_TEMPLATE_PATH = "/opt/db-template/recommendation.db"
 BOOTSTRAP_COMPLETE_KEY = "bootstrap_complete"
 IMDB_GZ_PATTERN = "*.tsv.gz"
+REQUIRED_MOVIES_COLUMNS = {"genres_text"}
+REQUIRED_INDEXES = {"idx_ratings_rating_votes_movie"}
 
 
 def sqlite_path_from_url(database_url: str) -> Path:
@@ -31,6 +33,27 @@ def cleanup_downloaded_imdb_files(data_dir: Path) -> None:
     for path in data_dir.glob(IMDB_GZ_PATTERN):
         if path.is_file():
             path.unlink()
+
+
+def database_is_bootstrapped(conn) -> bool:  # type: ignore[no-untyped-def]
+    initialized = conn.execute(
+        text("SELECT 1 FROM app_state WHERE key = :key"),
+        {"key": BOOTSTRAP_COMPLETE_KEY},
+    ).scalar_one_or_none()
+    if initialized is None:
+        return False
+
+    movie_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(movies)"))}
+    if not REQUIRED_MOVIES_COLUMNS.issubset(movie_columns):
+        return False
+
+    index_names = {
+        row[0]
+        for row in conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'")
+        )
+    }
+    return REQUIRED_INDEXES.issubset(index_names)
 
 
 def bootstrap_database() -> None:
@@ -48,15 +71,12 @@ def bootstrap_database() -> None:
     check_engine = get_engine(database_url, apply_sqlite_pragmas=False)
     try:
         with check_engine.connect() as conn:
-            initialized = conn.execute(
-                text("SELECT 1 FROM app_state WHERE key = :key"),
-                {"key": BOOTSTRAP_COMPLETE_KEY},
-            ).scalar_one_or_none()
+            initialized = database_is_bootstrapped(conn)
     except OperationalError:
-        initialized = None
+        initialized = False
     finally:
         check_engine.dispose()
-    if initialized is not None:
+    if initialized:
         return
 
     if db_path.exists():
@@ -65,7 +85,7 @@ def bootstrap_database() -> None:
         shutil.copy2(template_path, db_path)
 
     runtime_engine = get_engine(database_url, apply_sqlite_pragmas=False)
-    recreate_schema(runtime_engine, drop_existing=False)
+    recreate_schema(runtime_engine, drop_existing=True)
 
     download_imdb_data(data_dir)
 

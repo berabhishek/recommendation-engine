@@ -82,3 +82,65 @@ def test_movies_list_uses_default_filters_and_omits_total_by_default(tmp_path, m
     assert payload["meta"]["total"] == 1
     assert payload["meta"]["totalPages"] == 1
     assert payload["meta"]["hasNext"] is False
+
+
+def test_recommendations_keep_total_pagination_metadata(tmp_path, monkeypatch):
+    db_path = tmp_path / "movies.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    app_main = importlib.import_module("app.main")
+    app_main = importlib.reload(app_main)
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    recreate_schema(engine, drop_existing=False)
+    app_main.engine = engine
+    app_main.session_factory = get_session_factory(engine)
+
+    with app_main.session_factory() as session:
+        session.add_all(
+            [
+                Movie(
+                    id="tt1000001",
+                    title_type="movie",
+                    primary_title="Selected",
+                    original_title="Selected",
+                    genres_text="Drama",
+                    is_adult=False,
+                ),
+                MovieGenre(movie_id="tt1000001", genre="Drama"),
+                Movie(
+                    id="tt1000002",
+                    title_type="movie",
+                    primary_title="Candidate A",
+                    original_title="Candidate A",
+                    genres_text="Drama",
+                    is_adult=False,
+                ),
+                MovieRating(movie_id="tt1000002", average_rating=8.5, num_votes=200),
+                MovieGenre(movie_id="tt1000002", genre="Drama"),
+                Movie(
+                    id="tt1000003",
+                    title_type="movie",
+                    primary_title="Candidate B",
+                    original_title="Candidate B",
+                    genres_text="Drama",
+                    is_adult=False,
+                ),
+                MovieRating(movie_id="tt1000003", average_rating=8.0, num_votes=100),
+                MovieGenre(movie_id="tt1000003", genre="Drama"),
+            ]
+        )
+        session.commit()
+
+    client = TestClient(app_main.app)
+    response = client.post(
+        "/recommendations",
+        json={"selectedMovieIds": ["tt1000001"], "page": 1, "pageSize": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["data"]) == 1
+    assert payload["meta"]["hasNext"] is True
+    assert payload["meta"]["total"] == 2
+    assert payload["meta"]["totalPages"] == 2
