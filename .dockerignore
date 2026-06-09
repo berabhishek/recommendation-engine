@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+cookies.txt
+server.log
+data/
+raw data/
+*.db
+*.sqlite

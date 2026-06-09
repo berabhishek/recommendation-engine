@@ -4,7 +4,7 @@ import gzip
 from collections.abc import Iterator
 from pathlib import Path
 
-from sqlalchemy import Engine, insert, text
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 from app.database import create_indexes, drop_indexes, get_engine, get_session_factory, recreate_schema
@@ -20,6 +20,9 @@ from app.models import (
     PersonKnownForTitle,
     PersonProfession,
 )
+from app.progress import ProgressBar
+
+BATCH_SIZE = 100_000
 
 
 def is_null(value: str | None) -> bool:
@@ -72,9 +75,26 @@ def iter_tsv_gz(path: Path) -> Iterator[list[str]]:
             yield line.split("\t")
 
 
+def count_tsv_gz_rows(path: Path) -> int:
+    count = 0
+    for _ in iter_tsv_gz(path):
+        count += 1
+    return count
+
+
 def flush_insert(session: Session, model, batch: list[dict[str, object]]) -> None:  # type: ignore[no-untyped-def]
     if batch:
-        session.execute(insert(model), batch)
+        columns = list(batch[0].keys())
+        placeholders = ", ".join(["?"] * len(columns))
+        column_sql = ", ".join(columns)
+        sql = f"INSERT INTO {model.__tablename__} ({column_sql}) VALUES ({placeholders})"
+        rows = [tuple(row[column] for column in columns) for row in batch]
+        raw_connection = session.connection().connection
+        cursor = raw_connection.cursor()
+        try:
+            cursor.executemany(sql, rows)
+        finally:
+            cursor.close()
 
 
 def drop_database_file(engine: Engine) -> None:
@@ -88,11 +108,13 @@ def drop_database_file(engine: Engine) -> None:
         path.unlink()
 
 
-def import_movies(session: Session, path: Path) -> None:
+def import_movies(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     movie_rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         movie_rows.append(
             {
                 "id": parts[0],
@@ -105,35 +127,51 @@ def import_movies(session: Session, path: Path) -> None:
                 "runtime_minutes": parse_int(parts[7]),
             }
         )
-        if len(movie_rows) >= 5000:
+        if len(movie_rows) >= BATCH_SIZE:
             flush_insert(session, Movie, movie_rows)
             movie_rows = []
-        log_progress(path.name, count)
+            if progress is not None:
+                progress.advance(batch_count, label=path.name)
+            batch_count = 0
+        elif progress is None:
+            log_progress(path.name, count)
 
     flush_insert(session, Movie, movie_rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
-def import_movie_genres(session: Session, path: Path) -> None:
+def import_movie_genres(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     genre_rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         for genre in split_list(parts[8]):
             genre_rows.append({"movie_id": parts[0], "genre": genre})
-        if len(genre_rows) >= 5000:
+        if len(genre_rows) >= BATCH_SIZE:
             flush_insert(session, MovieGenre, genre_rows)
             genre_rows = []
-        log_progress(f"{path.name} genres", count)
+            if progress is not None:
+                progress.advance(batch_count, label=path.name)
+            batch_count = 0
+        elif progress is None:
+            log_progress(f"{path.name} genres", count)
 
     flush_insert(session, MovieGenre, genre_rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
-def import_people(session: Session, path: Path) -> None:
+def import_people(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     people_rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
 
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         person_id = parts[0]
         people_rows.append(
             {
@@ -143,56 +181,80 @@ def import_people(session: Session, path: Path) -> None:
                 "death_year": parse_int(parts[3]),
             }
         )
-        if len(people_rows) >= 5000:
+        if len(people_rows) >= BATCH_SIZE:
             flush_insert(session, Person, people_rows)
             people_rows = []
-        log_progress(path.name, count)
+            if progress is not None:
+                progress.advance(batch_count, label=path.name)
+            batch_count = 0
+        elif progress is None:
+            log_progress(path.name, count)
 
     flush_insert(session, Person, people_rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
-def import_people_metadata(session: Session, path: Path) -> None:
+def import_people_metadata(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     profession_rows: list[dict[str, object]] = []
     known_for_rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
 
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         person_id = parts[0]
         for profession in split_list(parts[4]):
             profession_rows.append({"person_id": person_id, "profession": profession})
         for position, movie_id in enumerate(split_list(parts[5])):
             known_for_rows.append({"person_id": person_id, "movie_id": movie_id, "position": position})
-        if len(profession_rows) >= 5000:
+        if len(profession_rows) >= BATCH_SIZE:
             flush_insert(session, PersonProfession, profession_rows)
             profession_rows = []
-        if len(known_for_rows) >= 5000:
+            if progress is not None:
+                progress.advance(batch_count, label=path.name)
+            batch_count = 0
+        if len(known_for_rows) >= BATCH_SIZE:
             flush_insert(session, PersonKnownForTitle, known_for_rows)
             known_for_rows = []
-        log_progress(f"{path.name} metadata", count)
+        elif progress is None:
+            log_progress(f"{path.name} metadata", count)
 
     flush_insert(session, PersonProfession, profession_rows)
     flush_insert(session, PersonKnownForTitle, known_for_rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
-def import_ratings(session: Session, path: Path) -> None:
+def import_ratings(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         rows.append({"movie_id": parts[0], "average_rating": parse_float(parts[1]) or 0.0, "num_votes": parse_int(parts[2]) or 0})
-        if len(rows) >= 5000:
+        if len(rows) >= BATCH_SIZE:
             flush_insert(session, MovieRating, rows)
             rows = []
-        log_progress(path.name, count)
+            if progress is not None:
+                progress.advance(batch_count, label=path.name)
+            batch_count = 0
+        elif progress is None:
+            log_progress(path.name, count)
     flush_insert(session, MovieRating, rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
-def import_principals(session: Session, path: Path) -> None:
+def import_principals(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         rows.append(
             {
                 "movie_id": parts[0],
@@ -203,18 +265,26 @@ def import_principals(session: Session, path: Path) -> None:
                 "characters": None if is_null(parts[5]) else parts[5],
             }
         )
-        if len(rows) >= 5000:
+        if len(rows) >= BATCH_SIZE:
             flush_insert(session, MoviePrincipal, rows)
             rows = []
-        log_progress(path.name, count)
+            if progress is not None:
+                progress.advance(batch_count, label=path.name)
+            batch_count = 0
+        elif progress is None:
+            log_progress(path.name, count)
     flush_insert(session, MoviePrincipal, rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
-def import_akas(session: Session, path: Path) -> None:
+def import_akas(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         rows.append(
             {
                 "movie_id": parts[0],
@@ -227,34 +297,47 @@ def import_akas(session: Session, path: Path) -> None:
                 "is_original_title": parse_bool(parts[7]),
             }
         )
-        if len(rows) >= 5000:
+        if len(rows) >= BATCH_SIZE:
             flush_insert(session, MovieAka, rows)
             rows = []
-        log_progress(path.name, count)
+            if progress is not None:
+                progress.advance(batch_count, label=path.name)
+            batch_count = 0
+        elif progress is None:
+            log_progress(path.name, count)
     flush_insert(session, MovieAka, rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
-def import_crew(session: Session, path: Path) -> None:
+def import_crew(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         movie_id = parts[0]
         for role, members in (("director", parts[1]), ("writer", parts[2])):
             for person_id in split_list(members):
                 rows.append({"movie_id": movie_id, "person_id": person_id, "role": role})
-                if len(rows) >= 5000:
+                if len(rows) >= BATCH_SIZE:
                     flush_insert(session, MovieCrewLink, rows)
                     rows = []
-        log_progress(path.name, count)
+        if progress is None:
+            log_progress(path.name, count)
     flush_insert(session, MovieCrewLink, rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
-def import_episodes(session: Session, path: Path) -> None:
+def import_episodes(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
     rows: list[dict[str, object]] = []
     count = 0
+    batch_count = 0
     for parts in iter_tsv_gz(path):
         count += 1
+        batch_count += 1
         rows.append(
             {
                 "movie_id": parts[0],
@@ -263,39 +346,67 @@ def import_episodes(session: Session, path: Path) -> None:
                 "episode_number": parse_int(parts[3]),
             }
         )
-        if len(rows) >= 5000:
+        if len(rows) >= BATCH_SIZE:
             flush_insert(session, MovieEpisode, rows)
             rows = []
-        log_progress(path.name, count)
+            if progress is not None:
+                progress.advance(batch_count, label=path.name)
+            batch_count = 0
+        elif progress is None:
+            log_progress(path.name, count)
     flush_insert(session, MovieEpisode, rows)
+    if progress is not None and batch_count:
+        progress.advance(batch_count, label=path.name)
 
 
 def import_imdb_data(
     database_url: str,
     data_dir: Path,
     reset: bool = True,
+    prepare_schema: bool = True,
+    rebuild_indexes: bool = True,
+    progress: ProgressBar | None = None,
 ) -> None:
     engine = get_engine(database_url)
-    if reset:
-        drop_database_file(engine)
-    recreate_schema(engine, drop_existing=True)
-    drop_indexes(engine)
+    if prepare_schema:
+        if reset:
+            drop_database_file(engine)
+        recreate_schema(engine, drop_existing=True)
+        drop_indexes(engine)
     session_factory = get_session_factory(engine)
+
+    total_rows = 0
+    if progress is not None:
+        for path in (
+            data_dir / "title.basics.tsv.gz",
+            data_dir / "title.basics.tsv.gz",
+            data_dir / "name.basics.tsv.gz",
+            data_dir / "name.basics.tsv.gz",
+            data_dir / "title.ratings.tsv.gz",
+            data_dir / "title.principals.tsv.gz",
+            data_dir / "title.akas.tsv.gz",
+            data_dir / "title.crew.tsv.gz",
+            data_dir / "title.episode.tsv.gz",
+        ):
+            total_rows += count_tsv_gz_rows(path)
+        progress.update_total(total_rows)
+        progress.update_label("importing")
 
     with session_factory() as session:
         session.execute(text("PRAGMA foreign_keys = OFF"))
         session.execute(text("PRAGMA synchronous = OFF"))
         session.execute(text("PRAGMA journal_mode = MEMORY"))
 
-        import_movies(session, data_dir / "title.basics.tsv.gz")
-        import_movie_genres(session, data_dir / "title.basics.tsv.gz")
-        import_people(session, data_dir / "name.basics.tsv.gz")
-        import_people_metadata(session, data_dir / "name.basics.tsv.gz")
-        import_ratings(session, data_dir / "title.ratings.tsv.gz")
-        import_principals(session, data_dir / "title.principals.tsv.gz")
-        import_akas(session, data_dir / "title.akas.tsv.gz")
-        import_crew(session, data_dir / "title.crew.tsv.gz")
-        import_episodes(session, data_dir / "title.episode.tsv.gz")
+        import_movies(session, data_dir / "title.basics.tsv.gz", progress=progress)
+        import_movie_genres(session, data_dir / "title.basics.tsv.gz", progress=progress)
+        import_people(session, data_dir / "name.basics.tsv.gz", progress=progress)
+        import_people_metadata(session, data_dir / "name.basics.tsv.gz", progress=progress)
+        import_ratings(session, data_dir / "title.ratings.tsv.gz", progress=progress)
+        import_principals(session, data_dir / "title.principals.tsv.gz", progress=progress)
+        import_akas(session, data_dir / "title.akas.tsv.gz", progress=progress)
+        import_crew(session, data_dir / "title.crew.tsv.gz", progress=progress)
+        import_episodes(session, data_dir / "title.episode.tsv.gz", progress=progress)
         session.commit()
 
-    create_indexes(engine)
+    if rebuild_indexes:
+        create_indexes(engine)

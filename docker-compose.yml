@@ -1,0 +1,12 @@
+services:
+  recommendation-engine:
+    build:
+      context: .
+    image: recommendation-engine:local
+    ports:
+      - "3000:3000"
+    volumes:
+      - recommendation-data:/data
+
+volumes:
+  recommendation-data:
