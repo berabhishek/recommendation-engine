@@ -45,7 +45,7 @@ def bootstrap_database() -> None:
     if template_path.exists() and not db_path.exists():
         shutil.copy2(template_path, db_path)
 
-    check_engine = get_engine(database_url)
+    check_engine = get_engine(database_url, apply_sqlite_pragmas=False)
     try:
         with check_engine.connect() as conn:
             initialized = conn.execute(
@@ -64,7 +64,7 @@ def bootstrap_database() -> None:
     if template_path.exists():
         shutil.copy2(template_path, db_path)
 
-    runtime_engine = get_engine(database_url)
+    runtime_engine = get_engine(database_url, apply_sqlite_pragmas=False)
     recreate_schema(runtime_engine, drop_existing=False)
 
     download_imdb_data(data_dir)

@@ -13,6 +13,7 @@ class Movie(Base):
     title_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     primary_title: Mapped[str] = mapped_column(String(512), index=True, nullable=False)
     original_title: Mapped[str] = mapped_column(String(512), nullable=False)
+    genres_text: Mapped[str | None] = mapped_column(String(256))
     is_adult: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     start_year: Mapped[int | None] = mapped_column(Integer, index=True)
     end_year: Mapped[int | None] = mapped_column(Integer)
@@ -157,6 +158,12 @@ Index("idx_movies_type_year", Movie.title_type, Movie.start_year)
 Index("idx_movies_title_year", Movie.primary_title, Movie.start_year)
 Index("idx_movie_genres_genre_movie", MovieGenre.genre, MovieGenre.movie_id)
 Index("idx_ratings_votes_rating", MovieRating.num_votes, MovieRating.average_rating)
+Index(
+    "idx_ratings_rating_votes_movie",
+    MovieRating.average_rating.desc(),
+    MovieRating.num_votes.desc(),
+    MovieRating.movie_id,
+)
 Index("idx_principals_movie_person", MoviePrincipal.movie_id, MoviePrincipal.person_id)
 Index("idx_akas_movie_region", MovieAka.movie_id, MovieAka.region)
 Index("idx_crew_movie_role", MovieCrewLink.movie_id, MovieCrewLink.role)

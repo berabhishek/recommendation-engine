@@ -16,6 +16,8 @@ The app exposes:
 - `GET /movies/{movie_id}`
 - `POST /recommendations`
 
+`GET /movies` defaults to `titleType=movie`, `minVotes=100`, and omits `total` unless you pass `includeTotal=true`.
+
 ## Recommended Start
 
 Use Docker if you want the full bootstrap handled for you.

@@ -164,6 +164,7 @@ def test_bootstrap_rebuilds_dirty_database_before_importing(tmp_path, monkeypatc
         }
         assert "idx_movies_type_year" in index_names
         assert "idx_ratings_votes_rating" in index_names
+        assert "idx_ratings_rating_votes_movie" in index_names
 
     docker_entrypoint.bootstrap_database()
 
