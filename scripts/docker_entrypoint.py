@@ -19,6 +19,7 @@ DEFAULT_DATA_DIR = "/data/imdb-data"
 BOOTSTRAP_COMPLETE_KEY = "bootstrap_complete"
 IMPORTER_VERSION = "1"
 DATASET_NAME = "imdb"
+DEFAULT_DATASET_VERSION = "imdb-latest"
 IMDB_GZ_PATTERN = "*.tsv.gz"
 IMPORT_RUN_STATUS_RUNNING = "running"
 IMPORT_RUN_STATUS_SUCCEEDED = "succeeded"
@@ -38,16 +39,8 @@ def cleanup_downloaded_imdb_files(data_dir: Path) -> None:
             path.unlink()
 
 
-def get_dataset_version(data_dir: Path) -> str | None:
-    required_files = [data_dir / filename for filename in sorted(IMDB_FILES)]
-    if not all(path.exists() for path in required_files):
-        return None
-
-    digest = []
-    for path in required_files:
-        stat = path.stat()
-        digest.append(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}")
-    return "|".join(digest)
+def get_dataset_version() -> str:
+    return os.getenv("IMDB_DATASET_VERSION", DEFAULT_DATASET_VERSION)
 
 
 def get_latest_successful_import_run(database_url: str) -> dict[str, object] | None:
@@ -178,7 +171,7 @@ def bootstrap_database() -> None:
     ):
         return
 
-    current_dataset_version = get_dataset_version(data_dir)
+    current_dataset_version = get_dataset_version()
 
     needs_import = (
         latest_run is None
@@ -198,7 +191,6 @@ def bootstrap_database() -> None:
 
     try:
         download_imdb_data(data_dir, overwrite=overwrite)
-        current_dataset_version = get_dataset_version(data_dir)
 
         row_count = import_imdb_data(
             database_url,

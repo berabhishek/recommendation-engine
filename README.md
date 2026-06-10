@@ -89,6 +89,7 @@ These are the main runtime settings:
 
 - `DATABASE_URL`: SQLite URL for the application database. Default for Docker is `sqlite:////data/recommendation.db`.
 - `DATA_DIR`: Directory used for IMDb downloads and import input.
+- `IMDB_DATASET_VERSION`: Logical IMDb dataset version recorded in `import_runs`. Defaults to `imdb-latest`.
 - `IMDB_DATA_DIR`: Default download directory for `scripts/download_imdb_data.py`.
 - `IMDB_DOWNLOAD_OVERWRITE`: Set to `1` to re-download existing IMDb files when using the download script.
 - `DEFAULT_PAGE_SIZE`: Default page size for list endpoints.
@@ -106,4 +107,6 @@ These are the main runtime settings:
 
 - The SQLite database is stored on the Docker named volume mounted at `/data`.
 - The downloaded IMDb gzip files are removed after a successful Docker bootstrap import, so the volume only keeps the database state.
+- Bootstrap idempotency is based on the stable `IMDB_DATASET_VERSION` value plus the Alembic revision and importer version, so cleanup of the gzip files does not trigger a re-import on the next startup.
+- If Docker starts against an unversioned legacy database, it will only stamp it as the Alembic baseline when the schema matches `Base.metadata` exactly; otherwise startup fails and requires a deliberate reset or migration.
 - Bootstrap state is tracked through `import_runs` plus the `app_state.bootstrap_complete` marker for backward compatibility.
