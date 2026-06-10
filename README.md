@@ -16,8 +16,6 @@ The app exposes:
 - `GET /movies/{movie_id}`
 - `POST /recommendations`
 
-`GET /movies` defaults to `titleType=movie`, `minVotes=100`, and omits `total` unless you pass `includeTotal=true`.
-
 ## Recommended Start
 
 Use Docker if you want the full bootstrap handled for you.
@@ -29,13 +27,12 @@ docker compose up --build
 On the first run this will:
 
 1. Build the image.
-2. Create a blank SQLite template during image build.
-3. Start the container.
-4. Detect that the database is not initialized yet.
-5. Download the IMDb `.tsv.gz` files into `/data/imdb-data`.
-6. Import the data into `/data/recommendation.db`.
-7. Remove the downloaded `.tsv.gz` files after the import completes.
-8. Mark bootstrap as complete and launch the API server on port `3000`.
+2. Start the container.
+3. Run `alembic upgrade head` against `/data/recommendation.db`.
+4. Download the IMDb `.tsv.gz` files into `/data/imdb-data`.
+5. Import the data into `/data/recommendation.db`.
+6. Remove the downloaded `.tsv.gz` files after the import completes.
+7. Record the import run and launch the API server on port `3000`.
 
 After the first successful run, the same command will reuse the named volume and skip the download/import step.
 
@@ -92,7 +89,7 @@ These are the main runtime settings:
 
 - `DATABASE_URL`: SQLite URL for the application database. Default for Docker is `sqlite:////data/recommendation.db`.
 - `DATA_DIR`: Directory used for IMDb downloads and import input.
-- `DB_TEMPLATE_PATH`: Template SQLite database path used during Docker build and bootstrap.
+- `IMDB_DATASET_VERSION`: Logical IMDb dataset version recorded in `import_runs`. Defaults to `imdb-latest`.
 - `IMDB_DATA_DIR`: Default download directory for `scripts/download_imdb_data.py`.
 - `IMDB_DOWNLOAD_OVERWRITE`: Set to `1` to re-download existing IMDb files when using the download script.
 - `DEFAULT_PAGE_SIZE`: Default page size for list endpoints.
@@ -110,4 +107,6 @@ These are the main runtime settings:
 
 - The SQLite database is stored on the Docker named volume mounted at `/data`.
 - The downloaded IMDb gzip files are removed after a successful Docker bootstrap import, so the volume only keeps the database state.
-- If the database exists but bootstrap has not been completed, the container resets it from the template before importing again.
+- Bootstrap idempotency is based on the stable `IMDB_DATASET_VERSION` value plus the Alembic revision and importer version, so cleanup of the gzip files does not trigger a re-import on the next startup.
+- If Docker starts against an unversioned legacy database, it will only stamp it as the Alembic baseline when the schema matches `Base.metadata` exactly; otherwise startup fails and requires a deliberate reset or migration.
+- Bootstrap state is tracked through `import_runs` plus the `app_state.bootstrap_complete` marker for backward compatibility.
