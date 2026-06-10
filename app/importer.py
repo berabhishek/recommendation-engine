@@ -375,10 +375,8 @@ def import_imdb_data(
     data_dir: Path,
     reset: bool = True,
     prepare_schema: bool = True,
-    rebuild_indexes: bool = True,
     progress: ProgressBar | None = None,
 ) -> int:
-    _ = rebuild_indexes
     engine = get_engine(database_url, apply_sqlite_pragmas=False)
     if prepare_schema:
         if reset:

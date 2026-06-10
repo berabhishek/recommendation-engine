@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from alembic.autogenerate import compare_metadata
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 
 from app.database import DATABASE_URL, get_engine
 from app.models import Base
@@ -24,26 +27,43 @@ def get_head_revision(database_url: str | None = None) -> str:
     return ScriptDirectory.from_config(config).get_current_head()
 
 
-def database_has_current_schema(database_url: str | None = None) -> bool:
-    engine = get_engine(database_url, apply_sqlite_pragmas=False)
-    try:
-        inspector = inspect(engine)
-        existing_tables = set(inspector.get_table_names())
-        return set(Base.metadata.tables) <= existing_tables
-    finally:
-        engine.dispose()
+def database_schema_matches_metadata(connection: Connection) -> bool:
+    migration_context = MigrationContext.configure(
+        connection,
+        opts={
+            "compare_type": True,
+            "compare_server_default": True,
+        },
+    )
+    return not compare_metadata(migration_context, Base.metadata)
 
 
 def upgrade_database(database_url: str | None = None) -> str:
     config = get_alembic_config(database_url)
     engine = get_engine(database_url, apply_sqlite_pragmas=False)
+    action: str
     try:
-        inspector = inspect(engine)
-        has_version_table = inspector.has_table("alembic_version")
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            has_version_table = inspector.has_table("alembic_version")
+            existing_tables = inspector.get_table_names()
+
+            if not has_version_table:
+                if not existing_tables:
+                    action = "upgrade"
+                elif database_schema_matches_metadata(connection):
+                    action = "stamp"
+                else:
+                    raise RuntimeError(
+                        "Refusing to stamp an existing database without alembic_version because its schema does not "
+                        "exactly match the current metadata. Run a deliberate legacy baseline step first."
+                    )
+            else:
+                action = "upgrade"
     finally:
         engine.dispose()
 
-    if not has_version_table and database_has_current_schema(database_url):
+    if action == "stamp":
         command.stamp(config, "head")
     else:
         command.upgrade(config, "head")

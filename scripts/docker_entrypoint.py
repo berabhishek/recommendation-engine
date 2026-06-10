@@ -20,6 +20,9 @@ BOOTSTRAP_COMPLETE_KEY = "bootstrap_complete"
 IMPORTER_VERSION = "1"
 DATASET_NAME = "imdb"
 IMDB_GZ_PATTERN = "*.tsv.gz"
+IMPORT_RUN_STATUS_RUNNING = "running"
+IMPORT_RUN_STATUS_SUCCEEDED = "succeeded"
+IMPORT_RUN_STATUS_FAILED = "failed"
 
 
 def sqlite_path_from_url(database_url: str) -> Path:
@@ -56,10 +59,11 @@ def get_latest_successful_import_run(database_url: str) -> dict[str, object] | N
                     "SELECT id, dataset_name, dataset_version, importer_version, alembic_revision, "
                     "status, started_at, finished_at, row_count, error_message "
                     "FROM import_runs "
-                    "WHERE status = 'succeeded' "
+                    "WHERE status = :status "
                     "ORDER BY id DESC "
                     "LIMIT 1"
-                )
+                ),
+                {"status": IMPORT_RUN_STATUS_SUCCEEDED},
             ).mappings().first()
             return dict(row) if row is not None else None
     except OperationalError:
@@ -111,7 +115,7 @@ def record_import_run_start(database_url: str, alembic_revision: str, dataset_ve
                     "dataset_version": dataset_version,
                     "importer_version": IMPORTER_VERSION,
                     "alembic_revision": alembic_revision,
-                    "status": "running",
+                    "status": IMPORT_RUN_STATUS_RUNNING,
                     "started_at": started_at,
                 },
             )
@@ -165,6 +169,15 @@ def bootstrap_database() -> None:
     current_revision = get_current_database_revision(database_url) or get_head_revision(database_url)
 
     latest_run = get_latest_successful_import_run(database_url)
+    if (
+        get_bootstrap_complete(database_url)
+        and latest_run is not None
+        and latest_run["dataset_name"] == DATASET_NAME
+        and latest_run["importer_version"] == IMPORTER_VERSION
+        and latest_run["alembic_revision"] == current_revision
+    ):
+        return
+
     current_dataset_version = get_dataset_version(data_dir)
 
     needs_import = (
@@ -192,13 +205,12 @@ def bootstrap_database() -> None:
             data_dir,
             reset=False,
             prepare_schema=False,
-            rebuild_indexes=True,
         )
     except Exception as exc:
         finish_import_run(
             database_url,
             run_id,
-            status="failed",
+            status=IMPORT_RUN_STATUS_FAILED,
             dataset_version=current_dataset_version,
             error_message=f"{type(exc).__name__}: {exc}",
         )
@@ -207,7 +219,7 @@ def bootstrap_database() -> None:
         finish_import_run(
             database_url,
             run_id,
-            status="succeeded",
+            status=IMPORT_RUN_STATUS_SUCCEEDED,
             dataset_version=current_dataset_version,
             row_count=row_count,
         )
