@@ -6,7 +6,9 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.settings import DATABASE_URL
+from app.settings import DATABASE_URL as SETTINGS_DATABASE_URL
+
+DATABASE_URL = SETTINGS_DATABASE_URL
 
 
 class Base(DeclarativeBase):

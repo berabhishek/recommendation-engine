@@ -18,10 +18,9 @@ def write_gz(path: Path, lines: list[str]) -> Path:
 
 def test_bootstrap_runs_download_then_import_and_records_state(tmp_path, monkeypatch):
     db_path = tmp_path / "data" / "recommendation.db"
-    template_path = tmp_path / "template" / "recommendation.db"
     data_dir = tmp_path / "imdb"
-    template_path.parent.mkdir(parents=True, exist_ok=True)
-    recreate_schema(create_engine(f"sqlite:///{template_path}"), drop_existing=False)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    recreate_schema(create_engine(f"sqlite:///{db_path}"), drop_existing=False)
 
     calls: list[str] = []
 
@@ -31,162 +30,14 @@ def test_bootstrap_runs_download_then_import_and_records_state(tmp_path, monkeyp
         target_dir.mkdir(parents=True, exist_ok=True)
         (target_dir / "title.ratings.tsv.gz").write_bytes(b"data")
 
-    def fake_import(database_url: str, import_data_dir: Path, **kwargs) -> None:
+    def fake_import(database_url: str, import_data_dir: Path, **kwargs) -> int:
         calls.append("import")
         assert database_url == f"sqlite:///{db_path}"
         assert import_data_dir == data_dir
         assert kwargs["reset"] is False
         assert kwargs["prepare_schema"] is False
         assert kwargs["rebuild_indexes"] is True
-
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("DATA_DIR", str(data_dir))
-    monkeypatch.setenv("DB_TEMPLATE_PATH", str(template_path))
-    monkeypatch.setattr(docker_entrypoint, "download_imdb_data", fake_download)
-    monkeypatch.setattr(docker_entrypoint, "import_imdb_data", fake_import)
-
-    docker_entrypoint.bootstrap_database()
-
-    assert calls == ["download", "import"]
-    with create_engine(f"sqlite:///{db_path}").connect() as conn:
-        assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
-    assert list(data_dir.glob("*.tsv.gz")) == []
-
-    docker_entrypoint.bootstrap_database()
-    assert calls == ["download", "import"]
-
-
-def test_bootstrap_rebuilds_dirty_database_before_importing(tmp_path, monkeypatch):
-    data_dir = tmp_path / "imdb"
-    db_path = tmp_path / "data" / "recommendation.db"
-    template_path = tmp_path / "template" / "recommendation.db"
-    template_path.parent.mkdir(parents=True, exist_ok=True)
-    recreate_schema(create_engine(f"sqlite:///{template_path}"), drop_existing=False)
-
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    dirty_engine = create_engine(f"sqlite:///{db_path}")
-    recreate_schema(dirty_engine, drop_existing=False)
-    with dirty_engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO movies (id, title_type, primary_title, original_title, is_adult) "
-                "VALUES ('ttdirty0001', 'movie', 'Dirty Movie', 'Dirty Movie', 0)"
-            )
-        )
-
-    source_dir = tmp_path / "sources"
-    source_dir.mkdir()
-
-    sources = {
-        "name.basics.tsv.gz": write_gz(
-            source_dir / "name.basics.tsv.gz",
-            [
-                "nconst\tprimaryName\tbirthYear\tdeathYear\tprimaryProfession\tknownForTitles",
-                "nm0000001\tExample Person\t1980\t\\N\tactor,director\ttt0000001,tt0000002",
-            ],
-        ),
-        "title.akas.tsv.gz": write_gz(
-            source_dir / "title.akas.tsv.gz",
-            [
-                "titleId\tordering\ttitle\tregion\tlanguage\ttypes\tattributes\tisOriginalTitle",
-                "tt0000001\t1\tExample Movie\tUS\ten\t\\N\t\\N\t1",
-            ],
-        ),
-        "title.basics.tsv.gz": write_gz(
-            source_dir / "title.basics.tsv.gz",
-            [
-                "tconst\ttitleType\tprimaryTitle\toriginalTitle\tisAdult\tstartYear\tendYear\truntimeMinutes\tgenres",
-                "tt0000001\tmovie\tExample Movie\tExample Movie\t0\t2024\t\\N\t120\tDrama",
-                "tt0000002\ttvEpisode\tExample Episode\tExample Episode\t0\t2024\t\\N\t45\tDrama,Short",
-            ],
-        ),
-        "title.crew.tsv.gz": write_gz(
-            source_dir / "title.crew.tsv.gz",
-            [
-                "tconst\tdirectors\twriters",
-                "tt0000001\tnm0000001\tnm0000001",
-            ],
-        ),
-        "title.episode.tsv.gz": write_gz(
-            source_dir / "title.episode.tsv.gz",
-            [
-                "tconst\tparentTconst\tseasonNumber\tepisodeNumber",
-                "tt0000002\ttt0000001\t1\t1",
-            ],
-        ),
-        "title.principals.tsv.gz": write_gz(
-            source_dir / "title.principals.tsv.gz",
-            [
-                "tconst\tordering\tnconst\tcategory\tjob\tcharacters",
-                "tt0000001\t1\tnm0000001\tactor\t\\N\t[\"Lead\"]",
-            ],
-        ),
-        "title.ratings.tsv.gz": write_gz(
-            source_dir / "title.ratings.tsv.gz",
-            [
-                "tconst\taverageRating\tnumVotes",
-                "tt0000001\t8.5\t1000",
-            ],
-        ),
-    }
-
-    def local_download(target_dir: Path, overwrite: bool = False) -> None:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        for filename, source in sources.items():
-            destination = target_dir / filename
-            if destination.exists() and not overwrite:
-                continue
-            destination.write_bytes(source.read_bytes())
-
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("DATA_DIR", str(data_dir))
-    monkeypatch.setenv("DB_TEMPLATE_PATH", str(template_path))
-    monkeypatch.setattr(docker_entrypoint, "download_imdb_data", local_download)
-
-    docker_entrypoint.bootstrap_database()
-
-    assert db_path.exists()
-    assert list(data_dir.glob("*.tsv.gz")) == []
-
-    engine = create_engine(f"sqlite:///{db_path}")
-    with engine.connect() as conn:
-        assert conn.execute(text("SELECT COUNT(*) FROM movies")).scalar_one() == 2
-        assert conn.execute(text("SELECT COUNT(*) FROM people")).scalar_one() == 1
-        assert conn.execute(text("SELECT COUNT(*) FROM movie_ratings")).scalar_one() == 1
-        assert conn.execute(text("SELECT COUNT(*) FROM movie_principals")).scalar_one() == 1
-        assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
-        assert conn.execute(text("SELECT COUNT(*) FROM movies WHERE id = 'ttdirty0001'")).scalar_one() == 0
-        index_names = {
-            row[0]
-            for row in conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'")
-            )
-        }
-        assert "idx_movies_type_year" in index_names
-        assert "idx_ratings_votes_rating" in index_names
-        assert "idx_ratings_rating_votes_movie" in index_names
-
-    docker_entrypoint.bootstrap_database()
-
-
-def test_bootstrap_recovers_when_app_state_table_is_missing(tmp_path, monkeypatch):
-    db_path = tmp_path / "data" / "recommendation.db"
-    data_dir = tmp_path / "imdb"
-
-    calls: list[str] = []
-
-    def fake_download(target_dir: Path, overwrite: bool = False) -> None:
-        calls.append("download")
-        assert target_dir == data_dir
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-    def fake_import(database_url: str, import_data_dir: Path, **kwargs) -> None:
-        calls.append("import")
-        assert database_url == f"sqlite:///{db_path}"
-        assert import_data_dir == data_dir
-        assert kwargs["reset"] is False
-        assert kwargs["prepare_schema"] is False
-        assert kwargs["rebuild_indexes"] is True
+        return 1
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("DATA_DIR", str(data_dir))
@@ -198,26 +49,25 @@ def test_bootstrap_recovers_when_app_state_table_is_missing(tmp_path, monkeypatc
     assert calls == ["download", "import"]
     with create_engine(f"sqlite:///{db_path}").connect() as conn:
         assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
+        assert conn.execute(text("SELECT COUNT(*) FROM import_runs")).scalar_one() == 1
+        assert conn.execute(text("SELECT status FROM import_runs ORDER BY id DESC LIMIT 1")).scalar_one() == "succeeded"
+    assert list(data_dir.glob("*.tsv.gz")) == []
+
+    docker_entrypoint.bootstrap_database()
+    assert calls == ["download", "import"]
 
 
-def test_bootstrap_rebuilds_initialized_database_missing_required_schema(tmp_path, monkeypatch):
+def test_bootstrap_stamps_existing_current_schema_before_importing(tmp_path, monkeypatch):
     db_path = tmp_path / "data" / "recommendation.db"
     data_dir = tmp_path / "imdb"
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    recreate_schema(create_engine(f"sqlite:///{db_path}"), drop_existing=False)
 
-    old_engine = create_engine(f"sqlite:///{db_path}")
-    with old_engine.begin() as conn:
-        conn.execute(text("CREATE TABLE app_state (key VARCHAR(64) PRIMARY KEY, value TEXT NOT NULL)"))
-        conn.execute(text("INSERT INTO app_state (key, value) VALUES ('bootstrap_complete', 'true')"))
+    with create_engine(f"sqlite:///{db_path}").begin() as conn:
         conn.execute(
             text(
-                "CREATE TABLE movies ("
-                "id VARCHAR(20) PRIMARY KEY, "
-                "title_type VARCHAR(50) NOT NULL, "
-                "primary_title VARCHAR(512) NOT NULL, "
-                "original_title VARCHAR(512) NOT NULL, "
-                "is_adult BOOLEAN NOT NULL"
-                ")"
+                "INSERT INTO movies (id, title_type, primary_title, original_title, genres_text, is_adult) "
+                "VALUES ('ttdirty0001', 'movie', 'Dirty Movie', 'Dirty Movie', 'Drama', 0)"
             )
         )
 
@@ -226,14 +76,17 @@ def test_bootstrap_rebuilds_initialized_database_missing_required_schema(tmp_pat
     def fake_download(target_dir: Path, overwrite: bool = False) -> None:
         calls.append("download")
         target_dir.mkdir(parents=True, exist_ok=True)
+        for filename in IMDB_FILES:
+            write_gz(target_dir / filename, ["header"])
 
-    def fake_import(database_url: str, import_data_dir: Path, **kwargs) -> None:
+    def fake_import(database_url: str, import_data_dir: Path, **kwargs) -> int:
         calls.append("import")
         assert database_url == f"sqlite:///{db_path}"
         assert import_data_dir == data_dir
         assert kwargs["reset"] is False
         assert kwargs["prepare_schema"] is False
         assert kwargs["rebuild_indexes"] is True
+        return 7
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("DATA_DIR", str(data_dir))
@@ -246,13 +99,8 @@ def test_bootstrap_rebuilds_initialized_database_missing_required_schema(tmp_pat
     with create_engine(f"sqlite:///{db_path}").connect() as conn:
         movie_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(movies)"))}
         assert "genres_text" in movie_columns
-        index_names = {
-            row[0]
-            for row in conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'")
-            )
-        }
-        assert "idx_ratings_rating_votes_movie" in index_names
+        assert conn.execute(text("SELECT COUNT(*) FROM movies WHERE id = 'ttdirty0001'")).scalar_one() == 1
+        assert conn.execute(text("SELECT COUNT(*) FROM import_runs")).scalar_one() == 1
         assert conn.execute(text("SELECT value FROM app_state WHERE key = 'bootstrap_complete'")).scalar_one() == "true"
 
 

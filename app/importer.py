@@ -7,7 +7,8 @@ from pathlib import Path
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
-from app.database import create_indexes, drop_indexes, get_engine, get_session_factory, recreate_schema
+from app.database import get_engine, get_session_factory
+from app.migrations import upgrade_database
 from app.models import (
     Movie,
     MovieAka,
@@ -108,7 +109,7 @@ def drop_database_file(engine: Engine) -> None:
         path.unlink()
 
 
-def import_movies(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_movies(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     movie_rows: list[dict[str, object]] = []
     count = 0
     batch_count = 0
@@ -140,9 +141,10 @@ def import_movies(session: Session, path: Path, progress: ProgressBar | None = N
     flush_insert(session, Movie, movie_rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
-def import_movie_genres(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_movie_genres(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     genre_rows: list[dict[str, object]] = []
     count = 0
     batch_count = 0
@@ -163,9 +165,10 @@ def import_movie_genres(session: Session, path: Path, progress: ProgressBar | No
     flush_insert(session, MovieGenre, genre_rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
-def import_people(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_people(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     people_rows: list[dict[str, object]] = []
     count = 0
     batch_count = 0
@@ -194,9 +197,10 @@ def import_people(session: Session, path: Path, progress: ProgressBar | None = N
     flush_insert(session, Person, people_rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
-def import_people_metadata(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_people_metadata(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     profession_rows: list[dict[str, object]] = []
     known_for_rows: list[dict[str, object]] = []
     count = 0
@@ -226,9 +230,10 @@ def import_people_metadata(session: Session, path: Path, progress: ProgressBar |
     flush_insert(session, PersonKnownForTitle, known_for_rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
-def import_ratings(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_ratings(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     rows: list[dict[str, object]] = []
     count = 0
     batch_count = 0
@@ -247,9 +252,10 @@ def import_ratings(session: Session, path: Path, progress: ProgressBar | None = 
     flush_insert(session, MovieRating, rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
-def import_principals(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_principals(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     rows: list[dict[str, object]] = []
     count = 0
     batch_count = 0
@@ -277,9 +283,10 @@ def import_principals(session: Session, path: Path, progress: ProgressBar | None
     flush_insert(session, MoviePrincipal, rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
-def import_akas(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_akas(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     rows: list[dict[str, object]] = []
     count = 0
     batch_count = 0
@@ -309,9 +316,10 @@ def import_akas(session: Session, path: Path, progress: ProgressBar | None = Non
     flush_insert(session, MovieAka, rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
-def import_crew(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_crew(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     rows: list[dict[str, object]] = []
     count = 0
     batch_count = 0
@@ -330,9 +338,10 @@ def import_crew(session: Session, path: Path, progress: ProgressBar | None = Non
     flush_insert(session, MovieCrewLink, rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
-def import_episodes(session: Session, path: Path, progress: ProgressBar | None = None) -> None:
+def import_episodes(session: Session, path: Path, progress: ProgressBar | None = None) -> int:
     rows: list[dict[str, object]] = []
     count = 0
     batch_count = 0
@@ -358,6 +367,7 @@ def import_episodes(session: Session, path: Path, progress: ProgressBar | None =
     flush_insert(session, MovieEpisode, rows)
     if progress is not None and batch_count:
         progress.advance(batch_count, label=path.name)
+    return count
 
 
 def import_imdb_data(
@@ -367,13 +377,13 @@ def import_imdb_data(
     prepare_schema: bool = True,
     rebuild_indexes: bool = True,
     progress: ProgressBar | None = None,
-) -> None:
+) -> int:
+    _ = rebuild_indexes
     engine = get_engine(database_url, apply_sqlite_pragmas=False)
     if prepare_schema:
         if reset:
             drop_database_file(engine)
-        recreate_schema(engine, drop_existing=True)
-        drop_indexes(engine)
+        upgrade_database(database_url)
     session_factory = get_session_factory(engine)
 
     total_rows = 0
@@ -398,16 +408,16 @@ def import_imdb_data(
         session.execute(text("PRAGMA synchronous = OFF"))
         session.execute(text("PRAGMA journal_mode = MEMORY"))
 
-        import_movies(session, data_dir / "title.basics.tsv.gz", progress=progress)
-        import_movie_genres(session, data_dir / "title.basics.tsv.gz", progress=progress)
-        import_people(session, data_dir / "name.basics.tsv.gz", progress=progress)
-        import_people_metadata(session, data_dir / "name.basics.tsv.gz", progress=progress)
-        import_ratings(session, data_dir / "title.ratings.tsv.gz", progress=progress)
-        import_principals(session, data_dir / "title.principals.tsv.gz", progress=progress)
-        import_akas(session, data_dir / "title.akas.tsv.gz", progress=progress)
-        import_crew(session, data_dir / "title.crew.tsv.gz", progress=progress)
-        import_episodes(session, data_dir / "title.episode.tsv.gz", progress=progress)
+        total_rows += import_movies(session, data_dir / "title.basics.tsv.gz", progress=progress)
+        total_rows += import_movie_genres(session, data_dir / "title.basics.tsv.gz", progress=progress)
+        total_rows += import_people(session, data_dir / "name.basics.tsv.gz", progress=progress)
+        total_rows += import_people_metadata(session, data_dir / "name.basics.tsv.gz", progress=progress)
+        total_rows += import_ratings(session, data_dir / "title.ratings.tsv.gz", progress=progress)
+        total_rows += import_principals(session, data_dir / "title.principals.tsv.gz", progress=progress)
+        total_rows += import_akas(session, data_dir / "title.akas.tsv.gz", progress=progress)
+        total_rows += import_crew(session, data_dir / "title.crew.tsv.gz", progress=progress)
+        total_rows += import_episodes(session, data_dir / "title.episode.tsv.gz", progress=progress)
         session.commit()
 
-    if rebuild_indexes:
-        create_indexes(engine)
+    engine.dispose()
+    return total_rows
