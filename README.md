@@ -12,9 +12,9 @@ This repository has two main workflows:
 The app exposes:
 
 - `GET /health`
-- `GET /movies`
+- `GET /movies`: Query parameters include `page`, `pageSize`, `sortBy`, `sortDir`, `q`, `titleType`, `genres`, `yearMin`, `yearMax`, `minRating`, `minVotes`.
 - `GET /movies/{movie_id}`
-- `POST /recommendations`
+- `POST /recommendations`: Payload fields include `selectedMovieIds`, `limit`, `page`, `pageSize`.
 
 ## Recommended Start
 
@@ -47,11 +47,19 @@ docker compose logs -f
 
 ## Local Development
 
-If you want to run the app without Docker:
+If you want to run the app without Docker, make sure you have Python >= 3.10:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -e ".[dev]"
+```
+
+### Testing
+
+Tests and code coverage can be executed and verified using the command:
+
+```bash
+.venv/bin/pytest --cov=app --cov=scripts --cov-report=term-missing
 ```
 
 ### Import the IMDb data
@@ -64,6 +72,8 @@ The importer reads gzip files from `raw data/` by default and rebuilds `data/rec
 
 Optional flags:
 
+- `--database-url`: Set a custom SQLite connection string.
+- `--data-dir`: Set a custom path to read IMDb gzip files from.
 - `--no-reset` keeps the existing database file and schema.
 - `--progress` forces the CLI progress bar.
 - `--no-progress` disables the progress bar.
@@ -83,6 +93,12 @@ If you want to fetch the IMDb exports yourself instead of relying on Docker boot
 ```
 
 By default this downloads into `/data/imdb-data` when run in the container, or into the directory you provide via `--data-dir`.
+
+Optional flags:
+
+- `--overwrite`: Re-download existing IMDb files.
+- `--progress`: Show a progress bar.
+- `--no-progress`: Disable the progress bar.
 
 ## Environment Variables
 
