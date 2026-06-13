@@ -18,6 +18,7 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 COPY scripts ./scripts
 COPY tests/fixtures/imdb-test/ /opt/test-data/imdb-test/
+RUN chmod +x /app/scripts/docker_smoke_test.sh
 
 RUN pip install --upgrade pip \
     && pip install .

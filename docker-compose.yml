@@ -19,8 +19,7 @@ services:
       DATA_DIR: /opt/test-data/imdb-test
     volumes:
       - recommendation-test-data:/data
-    command:
-      - sh
+    entrypoint:
       - /app/scripts/docker_smoke_test.sh
 
 volumes:
