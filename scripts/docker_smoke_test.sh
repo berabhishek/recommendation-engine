@@ -35,5 +35,9 @@ curl -fsS \
   >/tmp/recommendation-test-recommendations.json
 
 cleanup
-rm -f /data/recommendation-test.db
-test ! -e /data/recommendation-test.db
+if [ "${KEEP_TEST_DB:-0}" = "1" ]; then
+  test -e /data/recommendation-test.db
+else
+  rm -f /data/recommendation-test.db
+  test ! -e /data/recommendation-test.db
+fi

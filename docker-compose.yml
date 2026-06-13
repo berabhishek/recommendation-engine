@@ -17,11 +17,12 @@ services:
     environment:
       DATABASE_URL: sqlite:////data/recommendation-test.db
       DATA_DIR: /opt/test-data/imdb-test
-    tmpfs:
-      - /data
+    volumes:
+      - recommendation-test-data:/data
     command:
       - sh
       - /app/scripts/docker_smoke_test.sh
 
 volumes:
   recommendation-data:
+  recommendation-test-data:
