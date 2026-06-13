@@ -37,6 +37,24 @@ On the first run this will:
 
 After the first successful run, the same command will reuse the named volume and skip the download/import step.
 
+### Fast smoke test
+
+For a much smaller fixture-backed database, run the dedicated test service:
+
+```bash
+docker compose --profile test run --rm recommendation-test
+```
+
+That service uses the committed gzip fixtures in [`tests/fixtures/imdb-test/`](tests/fixtures/imdb-test/) to build a `recommendation-test` SQLite database, runs `curl` checks against `/health`, `/movies`, `/movies/{movie_id}`, and `/recommendations`, and removes the temporary test database before exiting.
+
+If you want to inspect the database after the smoke test, keep it with:
+
+```bash
+docker compose --profile test run --rm recommendation-test --keep-db
+```
+
+That leaves `/data/recommendation-test.db` in the named test volume so you can open it manually afterward.
+
 Useful follow-up commands:
 
 ```bash
@@ -109,3 +127,5 @@ These are the main runtime settings:
 - The SQLite database is stored on the Docker named volume mounted at `/data`.
 - The downloaded IMDb gzip files are removed after a successful Docker bootstrap import, so the volume only keeps the database state.
 - If the database exists but bootstrap has not been completed, the container resets it from the template before importing again.
+- The smoke-test container uses the tiny fixture set under [`tests/fixtures/imdb-test/`](tests/fixtures/imdb-test/) so it does not need the full IMDb download.
+- The smoke-test service can keep `recommendation-test.db` by passing `--keep-db`.

@@ -8,5 +8,20 @@ services:
     volumes:
       - recommendation-data:/data
 
+  recommendation-test:
+    profiles:
+      - test
+    build:
+      context: .
+    image: recommendation-engine:local
+    environment:
+      DATABASE_URL: sqlite:////data/recommendation-test.db
+      DATA_DIR: /opt/test-data/imdb-test
+    volumes:
+      - recommendation-test-data:/data
+    entrypoint:
+      - /app/scripts/docker_smoke_test.sh
+
 volumes:
   recommendation-data:
+  recommendation-test-data:

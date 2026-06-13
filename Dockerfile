@@ -1,5 +1,9 @@
 FROM python:3.14-slim
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -13,6 +17,8 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY app ./app
 COPY scripts ./scripts
+COPY tests/fixtures/imdb-test/ /opt/test-data/imdb-test/
+RUN chmod +x /app/scripts/docker_smoke_test.sh
 
 RUN pip install --upgrade pip \
     && pip install .
